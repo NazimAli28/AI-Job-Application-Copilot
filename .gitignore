@@ -1,0 +1,20 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage
+.vercel
+playwright-report
+test-results
+
+# Uploaded resumes (local storage driver)
+.storage
+
+# Local AI-assistant files (not part of the project)
+CLAUDE.md
+knowledge-graph.md
+docs/kg/
+.claude/

@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile # postinstall generates the Prisma client
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test # API tests use embedded PGlite — no database service needed
+      - run: pnpm build
+      - run: node apps/api/scripts/build-vercel.mjs # deploy bundle (Vercel function) still packs

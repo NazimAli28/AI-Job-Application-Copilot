@@ -1,0 +1,27 @@
+{
+  "name": "ai-job-application-copilot",
+  "private": true,
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "dev:all": "pnpm --parallel --filter web --filter api dev",
+    "db:local": "pnpm --filter api db:local",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "format": "prettier --write .",
+    "vercel-build": "pnpm --filter web build && pnpm --filter api db:migrate && node apps/api/scripts/build-vercel.mjs",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "prettier": "^3.6.2"
+  }
+}

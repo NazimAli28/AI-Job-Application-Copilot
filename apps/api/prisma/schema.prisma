@@ -1,0 +1,409 @@
+// Data model grows per phase (docs/kg/plan.md). Phase 1: auth · Phase 2: profile + AI access · Phase 3: resumes · Phase 4: jobs.
+// Profile columns use the shared Zod keys verbatim so modules/profile maps rows generically.
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  user
+  admin
+}
+
+model User {
+  id                 String               @id @default(cuid())
+  email              String               @unique
+  name               String
+  passwordHash       String? // null for the public demo account (no password login)
+  role               Role                 @default(user)
+  aiAccess           Boolean              @default(false) // invite-only AI Pro tier (D2)
+  isDemo             Boolean              @default(false)
+  /// Demo account only: when/which seed version was written (reseeded daily, modules/demo).
+  demoSeededAt       DateTime?
+  demoSeedVersion    Int?
+  onboardingComplete Boolean              @default(false)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  sessions           Session[]
+  resetTokens        PasswordResetToken[]
+  profile            Profile?
+  skills             ProfileSkill[]
+  experience         Experience[]
+  education          Education[]
+  projects           Project[]
+  certifications     Certification[]
+  resumes            Resume[]
+  jobs               Job[]
+  jobAttachments     JobAttachment[]
+  coverLetters       CoverLetter[]
+  analyses           Analysis[]
+  interviewSessions  InterviewSession[]
+  accessRequest      AccessRequest?       @relation("requester")
+  decidedRequests    AccessRequest[]      @relation("decider")
+  aiRequests         AiRequest[]
+}
+
+/// Opaque session: cookie holds a random token, DB stores only its HMAC (D5).
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  userAgent  String?
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Profile {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName           String
+  email              String
+  phone              String?
+  location           String?
+  linkedinUrl        String?
+  githubUrl          String?
+  portfolioUrl       String?
+  summary            String?
+  targetTitles       String[]
+  yearsExperience    Float
+  workTypes          String[]
+  preferredLocations String[]
+  salaryMin          Float?
+  salaryMax          Float?
+  salaryCurrency     String   @default("USD")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+/// nameKey = lower(trim(name)) — one row per skill per user (409 on duplicates).
+model ProfileSkill {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  nameKey   String
+  level     String?
+  years     Float?
+  status    String
+  evidence  String?
+  source    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, nameKey])
+}
+
+model Experience {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  company      String
+  location     String?
+  startDate    String
+  endDate      String?
+  current      Boolean
+  bullets      String[]
+  technologies String[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Education {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  institution String
+  degree      String
+  field       String?
+  startDate   String?
+  endDate     String?
+  grade       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Project {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  description  String
+  url          String?
+  technologies String[]
+  bullets      String[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Certification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  issuer    String?
+  date      String?
+  url       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+enum AccessStatus {
+  pending
+  approved
+  denied
+}
+
+/// Invite-only AI Pro (D2): one request per user; admin decision sets User.aiAccess.
+model AccessRequest {
+  id          String       @id @default(cuid())
+  userId      String       @unique
+  user        User         @relation("requester", fields: [userId], references: [id], onDelete: Cascade)
+  reason      String
+  status      AccessStatus @default(pending)
+  decidedById String?
+  decidedBy   User?        @relation("decider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([status, createdAt])
+}
+
+/// Uploaded resume (Phase 3): original PDF in StorageService (`storageKey`), extracted text +
+/// rule-based parse/analysis as JSON (shared Zod shapes). One active resume per user (service).
+model Resume {
+  id         String     @id @default(cuid())
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileName   String
+  label      String?
+  /// Job it was uploaded for (D9).
+  jobId      String?
+  job        Job?       @relation("uploadedFor", fields: [jobId], references: [id], onDelete: SetNull)
+  usedBy     Job[]      @relation("usedResume")
+  analyses   Analysis[]
+  fileSize   Int
+  storageKey String     @unique
+  isActive   Boolean    @default(false)
+  status     String     @default("ready")
+  text       String
+  parsed     Json?
+  analysis   Json?
+  aiAnalysis Json?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+/// A job = posting + its application tracking (D9). Posting/tracking columns use the shared Zod
+/// keys; `requirements`, `contacts`, `screeningAnswers` are JSON lists (D18). `materials` is split
+/// into resumeId (FK) / coverLetterId (plain id until Phase 5) / coverLetterText.
+model Job {
+  id                   String             @id @default(cuid())
+  userId               String
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title                String
+  company              String
+  location             String?
+  employmentType       String?
+  workType             String?
+  url                  String?
+  salary               String?
+  description          String
+  experienceYearsMin   Float?
+  educationRequirement String?
+  responsibilities     String[]
+  requirements         Json               @default("[]")
+  importedFrom         String?
+  status               String             @default("saved")
+  archived             Boolean            @default(false)
+  appliedAt            String?
+  applyBy              String?
+  nextAction           String?
+  nextActionAt         String?
+  source               String?
+  referral             String?
+  reference            String?
+  notes                String?
+  tags                 String[]
+  interviewDates       String[]
+  contacts             Json               @default("[]")
+  screeningAnswers     Json               @default("[]")
+  resumeId             String?
+  resume               Resume?            @relation("usedResume", fields: [resumeId], references: [id], onDelete: SetNull)
+  coverLetterId        String?
+  coverLetter          CoverLetter?       @relation("sentLetter", fields: [coverLetterId], references: [id], onDelete: SetNull)
+  coverLetterText      String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  history              JobStatusHistory[]
+  attachments          JobAttachment[]
+  uploadedResumes      Resume[]           @relation("uploadedFor")
+  matches              JobMatch[]
+  tailorings           JobTailoring[]
+  coverLetters         CoverLetter[]      @relation("letterFor")
+  analyses             Analysis[]
+  interviewSessions    InterviewSession[]
+
+  @@index([userId, createdAt])
+}
+
+model JobStatusHistory {
+  id     String   @id @default(cuid())
+  jobId  String
+  job    Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status String
+  note   String?
+  at     DateTime @default(now())
+
+  @@index([jobId, at])
+}
+
+/// "What I sent": a stored file (StorageService) or a link.
+model JobAttachment {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId      String
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  kind       String
+  label      String
+  url        String?
+  fileName   String?
+  fileSize   Int?
+  mimeType   String?
+  storageKey String?  @unique
+  createdAt  DateTime @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+/// Cached MatchResult per job and source (rules recomputed on every GET; `score` feeds the jobs list).
+model JobMatch {
+  id         String   @id @default(cuid())
+  jobId      String
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  source     String
+  score      Float
+  result     Json
+  computedAt DateTime @default(now())
+
+  @@unique([jobId, source])
+}
+
+/// TailoringResult per job and source; suggestion accept/reject edits `result` in place.
+model JobTailoring {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  source    String
+  result    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([jobId, source])
+}
+
+model CoverLetter {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId     String
+  job       Job      @relation("letterFor", fields: [jobId], references: [id], onDelete: Cascade)
+  length    String
+  tone      String
+  content   String
+  source    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sentWith  Job[]    @relation("sentLetter")
+
+  @@index([jobId, createdAt])
+}
+
+/// "Check my fit" result (D11): the whole Analysis as JSON; newest 20 kept per user.
+model Analysis {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Resume used for the check; null once deleted (the result keeps its original id/label).
+  resumeId   String?
+  resume     Resume?  @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+  /// Set by "Save as job"; null again if that job is deleted (saving then creates a new one).
+  savedJobId String?
+  savedJob   Job?     @relation(fields: [savedJobId], references: [id], onDelete: SetNull)
+  result     Json
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+/// Interview practice/mock session; questions + answers (with evaluations) as JSON.
+model InterviewSession {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId       String
+  job         Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  jobTitle    String
+  company     String
+  mode        String
+  questions   Json
+  answers     Json      @default("[]")
+  status      String    @default("in_progress")
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([userId, createdAt])
+}
+
+/// One Claude call (or simulated run) for AI Pro: usage/cost log + quota source (Phase 8).
+/// No prompt or output text is stored. userId SetNull so deleting an account never resets the monthly cap.
+model AiRequest {
+  id               String   @id @default(cuid())
+  userId           String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  task             String
+  model            String
+  status           String // ok | invalid | refused | error
+  inputTokens      Int      @default(0)
+  outputTokens     Int      @default(0)
+  cacheReadTokens  Int      @default(0)
+  cacheWriteTokens Int      @default(0)
+  latencyMs        Int      @default(0)
+  errorCode        String?
+  createdAt        DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
